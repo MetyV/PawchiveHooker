@@ -181,18 +181,14 @@ def sunh() -> float:
     return (next_run - now).total_seconds()
 
 async def looper(hooker: PawchiveHooker, *, profiles: bool, posts: bool):
-    try:
-        await checker(hooker, profiles, posts)
-    except Exception as e:
-        print(f'Error: {e}')
     while True:
-        delay = sunh()
-        await asyncio.sleep(delay)
         hooker.load_settings()
         try:
             await checker(hooker, profiles, posts)
         except Exception as e:
             print(f'Error: {e}')
+        delay = sunh()
+        await asyncio.sleep(delay)
         
 def cli():
     parser = argparse.ArgumentParser()
