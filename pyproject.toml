@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pawchive-hooker"
+version = "6.6.6"
+description = "Hook for Pawchive author updates"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp",
+    "aiofiles",
+    "platformdirs",
+    "pydantic>=2",
+]
+
+[project.scripts]
+hooker = "main:cli"
+
+[tool.setuptools]
+py-modules = ["main", "endpoints"]
+packages = ["mdl"]
