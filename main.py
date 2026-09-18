@@ -15,6 +15,26 @@ import aiofiles
 
 from mdl.author_profile import AProfile
 from mdl.settings import Settings
+import logging
+
+class FFHandler(logging.FileHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+logger = logging.getLogger('Pawchive')
+logger.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+CONFIGS = PlatformDirs('Pawchive', ensure_exists=True).user_config_path
+
+handler = FFHandler(CONFIGS/'app.log', mode='w', encoding='utf-8')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 class PawchiveHooker(Endpoints):
     def __init__(self, timeout: int = 10, semaphore: int = 4, autoUpdate: bool = False):
@@ -22,18 +42,18 @@ class PawchiveHooker(Endpoints):
         self.semaphore = semaphore
         self.timeout = timeout
 
-        self.CONFIGS = PlatformDirs('Pawchive', ensure_exists=True).user_config_path
         self.BASE_DIR = Path(__file__).resolve().parent
-        self.SETTINGS_DIR = self.CONFIGS / 'settings'
+        self.SETTINGS_DIR = CONFIGS / 'settings'
         Path.mkdir(self.SETTINGS_DIR, exist_ok=True)
         self.authors_file = self.SETTINGS_DIR / 'authors.txt'
         self.settings_file = self.SETTINGS_DIR / 'settings.json'
         if not self.authors_file.exists():
             self.authors_file.write_text('')
-        self.AUTHORS_DIR = self.CONFIGS / 'hooked_data'
+        self.AUTHORS_DIR = CONFIGS / 'hooked_data'
         Path.mkdir(self.AUTHORS_DIR, exist_ok=True)
 
     async def update_url(self):
+        logger.info('Updating endpoints')
         url = 'https://raw.githubusercontent.com/MetyV/PawchiveHooker/main/endpoints.py'
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(self.timeout)) as s:
             async with s.get(url) as r:
@@ -41,37 +61,61 @@ class PawchiveHooker(Endpoints):
                     c = await r.read()
                     async with aiofiles.open(self.BASE_DIR/'endpoints.py', 'wb') as f:
                         await f.write(c)
+                    logger.info('Endpoints updated')
+                else:
+                    b = await r.text()
+                    logger.error(
+                        'Endpoints update failed: HTTP %s %s | url=%s | body=%s',
+                        r.status,
+                        r.reason,
+                        url,
+                        b[:500]
+                    )
 
     def get_authors(self):
+        logger.info('Gathering authors')
         authors = []
         with open(self.authors_file, 'r', encoding='utf-8') as f:
-            for _, line in enumerate(f, 1):
+            for lo, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
                 parts = line.split('|')
                 if len(parts) != 2:
+                    logger.warning('Skipping line %d: lines != 2 | %r', lo, line)
                     continue
                 service = parts[0].strip()
                 id = parts[1].strip()
                 if not service or not id:
+                    logger.warning('Skipping line %d: empty field | %r', lo, line)
                     continue
                 authors.append((service, id))
+        logger.info('Gathered %d authors: %s', len(authors), [i for _,i in authors])
         return authors
 
     def add_user(self, service, id):
         with self.authors_file.open('a', encoding='utf-8') as f:
             f.write(f'{service}|{id}\n')
+        logger.info('Added %s author %s', service, id)
 
     async def get_author_update_data(self, service, id):
+        logger.info('Gathering update for %s|%s', service, id)
         url = self.BASE_API + f'/{service}/user/{id}/profile'
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(self.timeout)) as s:
             async with s.get(url) as r:
                 if not r.status == 200:
+                    b = await r.text()
+                    logger.error(
+                        'Author data gathering failed: HTTP %s %s | url=%s | body=%s',
+                        r.status,
+                        r.reason,
+                        url,
+                        b[:500]
+                    )
                     return
                 data = await r.json()
         if not data:
-            print('No author data')
+            logger.error('No author data gathered')
             return
         data = AProfile.model_validate(data)
         name = data.name
@@ -79,13 +123,16 @@ class PawchiveHooker(Endpoints):
         author = self.AUTHORS_DIR / f'{safe}.json'
         if not author.exists():
             author.write_text(data.model_dump_json(indent=2), encoding='utf-8')
+            logger.info('First seeing author %s', name)
             return
         ttime = AProfile.model_validate_json(author.read_text(encoding='utf-8')).updated
         time = data.updated
         if not time > ttime:
+            logger.info('No update for %s', name)
             return
         
         author.write_text(data.model_dump_json(indent=2), encoding='utf-8')
+        logger.info('Author %s updated', name)
         self.notify('Author updated', name)
         return True
 
@@ -181,6 +228,7 @@ def sunh() -> float:
     return (next_run - now).total_seconds()
 
 async def looper(hooker: PawchiveHooker, *, profiles: bool, posts: bool):
+    logger.info('Hooker started')
     while True:
         hooker.load_settings()
         try:
@@ -197,7 +245,7 @@ def cli():
     parser.add_argument('--check-profiles', action='store_true', default=False)
     parser.add_argument('--check-posts', action='store_true', default=False)
     parser.add_argument('--auto-update', action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument('action', choices=['start', 'stop'])
+    parser.add_argument('action', nargs='?', choices=['start', 'stop'])
 
     args = parser.parse_args()
 
@@ -217,7 +265,7 @@ def cli():
         hooker.settings.auto_update = args.auto_update
     hooker.save_settings()
 
-    pid_file = hooker.CONFIGS / 'hooker.pid'
+    pid_file = CONFIGS / 'hooker.pid'
 
     if args.action == 'start':
         if pid_file.exists():
