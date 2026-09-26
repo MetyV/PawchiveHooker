@@ -1,21 +1,23 @@
 import argparse
 import asyncio
-from datetime import datetime, timedelta
+import logging
 import os
-from pathlib import Path
 import platform
 import shutil
 import signal
 import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-import aiohttp
-from platformdirs import PlatformDirs
-from endpoints import Endpoints
 import aiofiles
+import aiohttp
+from aiohttp.client import ClientTimeout
+from platformdirs import PlatformDirs
 
+from endpoints import Endpoints
 from mdl.author_profile import AProfile
 from mdl.settings import Settings
-import logging
+
 
 class FFHandler(logging.FileHandler):
     def emit(self, record):
@@ -41,7 +43,6 @@ class PawchiveHooker(Endpoints):
         super().__init__()
         self.semaphore = semaphore
         self.timeout = timeout
-
         self.BASE_DIR = Path(__file__).resolve().parent
         self.SETTINGS_DIR = CONFIGS / 'settings'
         Path.mkdir(self.SETTINGS_DIR, exist_ok=True)
@@ -55,22 +56,23 @@ class PawchiveHooker(Endpoints):
     async def update_url(self):
         logger.info('Updating endpoints')
         url = 'https://raw.githubusercontent.com/MetyV/PawchiveHooker/main/endpoints.py'
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(self.timeout)) as s:
-            async with s.get(url) as r:
-                if r.status == 200:
-                    c = await r.read()
-                    async with aiofiles.open(self.BASE_DIR/'endpoints.py', 'wb') as f:
-                        await f.write(c)
-                    logger.info('Endpoints updated')
-                else:
-                    b = await r.text()
-                    logger.error(
-                        'Endpoints update failed: HTTP %s %s | url=%s | body=%s',
-                        r.status,
-                        r.reason,
-                        url,
-                        b[:500]
-                    )
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(self.timeout)
+        ).get(url) as r:
+            if r.status == 200:
+                c = await r.read()
+                async with aiofiles.open(self.BASE_DIR / "endpoints.py", "wb") as f:
+                    await f.write(c)
+                logger.info("Endpoints updated")
+            else:
+                b = await r.text()
+                logger.error(
+                    "Endpoints update failed: HTTP %s %s | url=%s | body=%s",
+                    r.status,
+                    r.reason,
+                    url,
+                    b[:500],
+                )
 
     def get_authors(self):
         logger.info('Gathering authors')
@@ -101,19 +103,19 @@ class PawchiveHooker(Endpoints):
     async def get_author_update_data(self, service, id):
         logger.info('Gathering update for %s|%s', service, id)
         url = self.BASE_API + f'/{service}/user/{id}/profile'
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(self.timeout)) as s:
-            async with s.get(url) as r:
-                if not r.status == 200:
-                    b = await r.text()
-                    logger.error(
-                        'Author data gathering failed: HTTP %s %s | url=%s | body=%s',
-                        r.status,
-                        r.reason,
-                        url,
-                        b[:500]
-                    )
-                    return
-                data = await r.json()
+        try:
+            async with aiohttp.ClientSession().request(
+                "GET", url, timeout=ClientTimeout(total=self.timeout)
+            ) as response:
+                data = await response.json()
+        except aiohttp.ClientResponseError as e:
+            logger.error(
+                "Author data gathering failed: HTTP %s %s | url=%s",
+                e.status,
+                e.message,
+                url,
+            )
+            return
         if not data:
             logger.error('No author data gathered')
             return
@@ -223,7 +225,7 @@ async def checker(hooker: PawchiveHooker, profiles: bool, posts: bool):
     )
 
 def sunh() -> float:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     next_run = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     return (next_run - now).total_seconds()
 

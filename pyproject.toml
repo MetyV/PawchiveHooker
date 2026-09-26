@@ -9,7 +9,6 @@ description = "Hook for Pawchive author updates"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp",
-    "aiofiles",
     "platformdirs",
     "pydantic>=2",
 ]
